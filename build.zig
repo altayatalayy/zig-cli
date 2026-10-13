@@ -25,6 +25,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(example);
     const run_example = b.addRunArtifact(example);
-    if (b.args) |args| run_example.addArgs(args);
+    run_example.addPassthruArgs();
     b.step("example", "Run the example (pass args after --)").dependOn(&run_example.step);
 }

@@ -108,8 +108,8 @@ fn dispatchUnion(comptime T: type) ?type {
         switch (@typeInfo(T)) {
             .@"union" => return T,
             .@"struct" => {
-                for (@typeInfo(T).@"struct".fields) |f| {
-                    if (spec.fieldKind(T, f.name) == .subcommand) return commandUnion(f.type);
+                for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types) |name, field_type| {
+                    if (spec.fieldKind(T, name) == .subcommand) return commandUnion(field_type);
                 }
                 return null;
             },
@@ -122,7 +122,7 @@ fn dispatchUnion(comptime T: type) ?type {
 
 fn structHelp(comptime T: type, comptime prog: []const u8) []const u8 {
     comptime {
-        const fields = @typeInfo(T).@"struct".fields;
+        const fields = @typeInfo(T).@"struct";
         const width = columnWidth(T);
         var out: []const u8 = "";
 
@@ -138,17 +138,17 @@ fn structHelp(comptime T: type, comptime prog: []const u8) []const u8 {
 
         // Options
         var opt_rows: []const u8 = "";
-        for (fields) |f| {
-            if (spec.fieldKind(T, f.name) == .flag) {
-                opt_rows = opt_rows ++ row(flagLabel(T, f.name), flagDesc(T, f), width);
+        for (fields.field_names) |name| {
+            if (spec.fieldKind(T, name) == .flag) {
+                opt_rows = opt_rows ++ row(flagLabel(T, name), flagDesc(T, name), width);
             }
         }
         if (opt_rows.len > 0) out = out ++ "\nOptions:\n" ++ opt_rows;
 
         // Commands (a single subcommand union field, if present)
-        for (fields) |f| {
-            if (spec.fieldKind(T, f.name) == .subcommand) {
-                out = out ++ "\nCommands:\n" ++ commandRows(commandUnion(f.type), width);
+        for (fields.field_names, fields.field_types) |name, field_type| {
+            if (spec.fieldKind(T, name) == .subcommand) {
+                out = out ++ "\nCommands:\n" ++ commandRows(commandUnion(field_type), width);
             }
         }
 
@@ -172,8 +172,8 @@ fn unionHelp(comptime U: type, comptime prog: []const u8) []const u8 {
 fn commandRows(comptime U: type, comptime width: usize) []const u8 {
     comptime {
         var rows: []const u8 = "";
-        for (@typeInfo(U).@"union".fields) |f| {
-            rows = rows ++ row(dashed(f.name), descOf(U, f.name), width);
+        for (@typeInfo(U).@"union".field_names) |name| {
+            rows = rows ++ row(dashed(name), descOf(U, name), width);
         }
         return rows;
     }
@@ -184,8 +184,8 @@ fn usageLine(comptime T: type, comptime prog: []const u8) []const u8 {
         var s: []const u8 = "usage: " ++ prog;
         if (hasFlags(T)) s = s ++ " [options]";
         for (spec.positionalNames(T)) |name| s = s ++ " " ++ posToken(T, name);
-        for (@typeInfo(T).@"struct".fields) |f| {
-            if (spec.fieldKind(T, f.name) == .subcommand) s = s ++ " <command>";
+        for (@typeInfo(T).@"struct".field_names) |name| {
+            if (spec.fieldKind(T, name) == .subcommand) s = s ++ " <command>";
         }
         return s;
     }
@@ -206,10 +206,12 @@ fn flagLabel(comptime T: type, comptime field: []const u8) []const u8 {
     }
 }
 
-fn flagDesc(comptime T: type, comptime f: std.builtin.Type.StructField) []const u8 {
+fn flagDesc(comptime T: type, comptime name: []const u8) []const u8 {
     comptime {
-        const d = descOf(T, f.name);
-        if (f.defaultValue() == null) return if (d.len > 0) d ++ " (required)" else "(required)";
+        const d = descOf(T, name);
+        const fields = @typeInfo(T).@"struct";
+        const i = std.meta.fieldIndex(T, name).?;
+        if (fields.field_attrs[i].defaultValue(fields.field_types[i]) == null) return if (d.len > 0) d ++ " (required)" else "(required)";
         return d;
     }
 }
@@ -222,7 +224,8 @@ fn posToken(comptime T: type, comptime name: []const u8) []const u8 {
         var inner: []const u8 = "<" ++ dashed(name) ++ ">";
         if (spec.isVariadic(F)) inner = inner ++ "...";
         const i = std.meta.fieldIndex(T, name).?;
-        const optional = @typeInfo(T).@"struct".fields[i].defaultValue() != null;
+        const fields = @typeInfo(T).@"struct";
+        const optional = fields.field_attrs[i].defaultValue(fields.field_types[i]) != null;
         return if (optional) "[" ++ inner ++ "]" else inner;
     }
 }
@@ -242,8 +245,8 @@ fn valuePlaceholder(comptime F: type) []const u8 {
 fn enumChoices(comptime E: type) []const u8 {
     comptime {
         var s: []const u8 = "";
-        for (@typeInfo(E).@"enum".fields, 0..) |f, i| {
-            s = s ++ (if (i == 0) "" else "|") ++ dashed(f.name);
+        for (@typeInfo(E).@"enum".field_names, 0..) |name, i| {
+            s = s ++ (if (i == 0) "" else "|") ++ dashed(name);
         }
         return s;
     }
@@ -283,15 +286,15 @@ fn columnWidth(comptime T: type) usize {
         var w: usize = 0;
         switch (@typeInfo(T)) {
             .@"union" => {
-                for (@typeInfo(T).@"union".fields) |f| w = @max(w, dashed(f.name).len);
+                for (@typeInfo(T).@"union".field_names) |name| w = @max(w, dashed(name).len);
             },
             .@"struct" => {
                 for (spec.positionalNames(T)) |name| w = @max(w, posToken(T, name).len);
-                for (@typeInfo(T).@"struct".fields) |f| {
-                    switch (spec.fieldKind(T, f.name)) {
-                        .flag => w = @max(w, flagLabel(T, f.name).len),
-                        .subcommand => for (@typeInfo(commandUnion(f.type)).@"union".fields) |v| {
-                            w = @max(w, dashed(v.name).len);
+                for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types) |name, field_type| {
+                    switch (spec.fieldKind(T, name)) {
+                        .flag => w = @max(w, flagLabel(T, name).len),
+                        .subcommand => for (@typeInfo(commandUnion(field_type)).@"union".field_names) |variant| {
+                            w = @max(w, dashed(variant).len);
                         },
                         .positional => {},
                     }
@@ -344,8 +347,8 @@ fn shorthandFor(comptime T: type, comptime field: []const u8) ?u8 {
 
 fn hasFlags(comptime T: type) bool {
     comptime {
-        for (@typeInfo(T).@"struct".fields) |f| {
-            if (spec.fieldKind(T, f.name) == .flag) return true;
+        for (@typeInfo(T).@"struct".field_names) |name| {
+            if (spec.fieldKind(T, name) == .flag) return true;
         }
         return false;
     }
@@ -378,9 +381,9 @@ fn validateMeta(comptime T: type) void {
             if (info != .@"struct") {
                 @compileError("cli: descriptions in " ++ @typeName(T) ++ " must be a struct literal");
             }
-            for (info.@"struct".fields) |f| {
-                if (!nameExists(T, f.name)) {
-                    @compileError("cli: descriptions in " ++ @typeName(T) ++ " names unknown field/command '" ++ f.name ++ "'");
+            for (info.@"struct".field_names) |name| {
+                if (!nameExists(T, name)) {
+                    @compileError("cli: descriptions in " ++ @typeName(T) ++ " names unknown field/command '" ++ name ++ "'");
                 }
             }
         }

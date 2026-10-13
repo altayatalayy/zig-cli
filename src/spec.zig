@@ -51,7 +51,7 @@ pub fn command(comptime E: type, word: []const u8) error{UnknownCommand}!E {
 pub fn Flags(comptime T: type) type {
     return struct {
         values: T = .{},
-        seen: Seen(T) = .initEmpty(),
+        seen: Seen(T) = .empty,
 
         const Self = @This();
 
@@ -82,21 +82,22 @@ pub fn splitList(alloc: std.mem.Allocator, text: []const u8) std.mem.Allocator.E
 fn parseStruct(comptime T: type, p: *Parser) ParseError!T {
     comptime validateStruct(T);
     var result: T = undefined;
-    var seen: Seen(T) = .initEmpty();
+    var seen: Seen(T) = .empty;
 
     while (p.next()) |arg| switch (arg) {
         .flag => |flag| try setFlag(T, &result, &seen, p, flag),
         .positional => |word| try setPositional(T, &result, &seen, p, word),
     };
 
-    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
+    const fields = @typeInfo(T).@"struct";
+    inline for (fields.field_names, fields.field_types, fields.field_attrs, 0..) |name, field_type, attrs, i| {
         if (!seen.isSet(i)) {
-            if (comptime field.defaultValue()) |default| {
-                @field(result, field.name) = default;
-            } else switch (comptime fieldKind(T, field.name)) {
-                .flag => return p.fail(error.MissingFlag, comptime flagName(field.name)),
-                .positional => return p.fail(error.MissingArgument, field.name),
-                .subcommand => return p.fail(error.MissingCommand, field.name),
+            if (comptime attrs.defaultValue(field_type)) |default| {
+                @field(result, name) = default;
+            } else switch (comptime fieldKind(T, name)) {
+                .flag => return p.fail(error.MissingFlag, comptime flagName(name)),
+                .positional => return p.fail(error.MissingArgument, name),
+                .subcommand => return p.fail(error.MissingCommand, name),
             }
         }
     }
@@ -113,9 +114,10 @@ fn parseUnion(comptime U: type, p: *Parser) ParseError!U {
 
 fn dispatch(comptime U: type, p: *Parser, word: []const u8) ParseError!U {
     comptime validateUnion(U);
-    inline for (@typeInfo(U).@"union".fields) |field| {
-        if (parser.eqlDashed(field.name, word)) {
-            return @unionInit(U, field.name, try parsePayload(field.type, p));
+    const fields = @typeInfo(U).@"union";
+    inline for (fields.field_names, fields.field_types) |name, field_type| {
+        if (parser.eqlDashed(name, word)) {
+            return @unionInit(U, name, try parsePayload(field_type, p));
         }
     }
     return p.fail(error.UnknownCommand, word);
@@ -127,12 +129,13 @@ fn parsePayload(comptime T: type, p: *Parser) ParseError!T {
 }
 
 fn setFlag(comptime T: type, values: *T, seen: *Seen(T), p: *Parser, flag: Flag) ParseError!void {
-    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
-        if (comptime fieldKind(T, field.name) == .flag) {
-            if (matchesFlag(T, field.name, flag.name)) {
+    const fields = @typeInfo(T).@"struct";
+    inline for (fields.field_names, fields.field_types, 0..) |name, field_type, i| {
+        if (comptime fieldKind(T, name) == .flag) {
+            if (matchesFlag(T, name, flag.name)) {
                 if (seen.isSet(i)) return p.fail(error.DuplicateFlag, flag.name);
                 seen.set(i);
-                @field(values, field.name) = try parseFlagValue(field.type, p, flag);
+                @field(values, name) = try parseFlagValue(field_type, p, flag);
                 return;
             }
         }
@@ -155,10 +158,11 @@ fn setPositional(comptime T: type, values: *T, seen: *Seen(T), p: *Parser, word:
             return;
         }
     }
-    inline for (@typeInfo(T).@"struct".fields, 0..) |field, i| {
-        if (comptime fieldKind(T, field.name) == .subcommand) {
+    const fields = @typeInfo(T).@"struct";
+    inline for (fields.field_names, fields.field_types, 0..) |name, field_type, i| {
+        if (comptime fieldKind(T, name) == .subcommand) {
             seen.set(i);
-            @field(values, field.name) = try dispatchInto(field.type, p, word);
+            @field(values, name) = try dispatchInto(field_type, p, word);
             return;
         }
     }
@@ -222,13 +226,13 @@ pub const Shorthand = struct { letter: u8, field: []const u8 };
 pub fn shorthandsOf(comptime T: type) []const Shorthand {
     comptime {
         if (!@hasDecl(T, "shorthands")) return &.{};
-        const decl_fields = @typeInfo(@TypeOf(T.shorthands)).@"struct".fields;
-        var out: [decl_fields.len]Shorthand = undefined;
-        for (decl_fields, 0..) |field, i| {
-            if (field.name.len != 1) {
-                @compileError("cli: shorthand '" ++ field.name ++ "' in " ++ @typeName(T) ++ " must be a single letter");
+        const names = @typeInfo(@TypeOf(T.shorthands)).@"struct".field_names;
+        var out: [names.len]Shorthand = undefined;
+        for (names, 0..) |name, i| {
+            if (name.len != 1) {
+                @compileError("cli: shorthand '" ++ name ++ "' in " ++ @typeName(T) ++ " must be a single letter");
             }
-            out[i] = .{ .letter = field.name[0], .field = @field(T.shorthands, field.name) };
+            out[i] = .{ .letter = name[0], .field = @field(T.shorthands, name) };
         }
         const final = out;
         return &final;
@@ -257,17 +261,17 @@ pub fn flagName(comptime field_name: []const u8) []const u8 {
 }
 
 fn Seen(comptime T: type) type {
-    return std.StaticBitSet(@typeInfo(T).@"struct".fields.len);
+    return std.StaticBitSet(@typeInfo(T).@"struct".field_names.len);
 }
 
 pub fn validateStruct(comptime T: type) void {
     comptime {
-        const fields = @typeInfo(T).@"struct".fields;
+        const fields = @typeInfo(T).@"struct";
         const pos = positionalNames(T);
         for (pos, 0..) |name, order| {
             const i = std.meta.fieldIndex(T, name) orelse
                 @compileError("cli: positionals decl in " ++ @typeName(T) ++ " names unknown field '" ++ name ++ "'");
-            const F = fields[i].type;
+            const F = fields.field_types[i];
             if (isCommandType(F)) @compileError("cli: positional field '" ++ name ++ "' cannot be a command union");
             if (F == bool) @compileError("cli: positional field '" ++ name ++ "' cannot be bool");
             if (isVariadic(F) and order != pos.len - 1) {
@@ -275,8 +279,8 @@ pub fn validateStruct(comptime T: type) void {
             }
         }
         var commands = 0;
-        for (fields) |field| {
-            if (fieldKind(T, field.name) == .subcommand) commands += 1;
+        for (fields.field_names) |name| {
+            if (fieldKind(T, name) == .subcommand) commands += 1;
         }
         if (commands > 1) @compileError("cli: " ++ @typeName(T) ++ " declares more than one command union field");
         for (shorthandsOf(T)) |sh| {

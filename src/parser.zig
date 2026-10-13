@@ -125,8 +125,9 @@ pub fn parseValue(comptime T: type, p: *Parser, text: []const u8) ParseError!T {
 /// Maps a dashed word to an enum tag; `-` matches `_` so `from-ir` resolves to
 /// `.from_ir`. Returns null when no tag matches.
 pub fn parseEnum(comptime E: type, text: []const u8) ?E {
-    inline for (@typeInfo(E).@"enum".fields) |field| {
-        if (eqlDashed(field.name, text)) return @enumFromInt(field.value);
+    const info = @typeInfo(E).@"enum";
+    inline for (info.field_names, info.field_values) |name, value| {
+        if (eqlDashed(name, text)) return @fromBackingInt(@intCast(value));
     }
     return null;
 }

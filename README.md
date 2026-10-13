@@ -1,6 +1,6 @@
 # zig-cli
 
-Comptime-driven command-line parsing for Zig 0.16, in the spirit of clap
+Comptime-driven command-line parsing for Zig 0.17, in the spirit of clap
 (Rust), cobra (Go), and click (Python) but without builders or allocation:
 the command shape is plain Zig types and `cli.parse` derives the parser.
 
